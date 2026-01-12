@@ -1,0 +1,17 @@
+# 本地密钥与环境
+.env
+.env.*
+!.env.example
+
+# 构建产物
+bin/
+coverage.out
+*.sarif
+semgrep.json
+ai-review.md
+ai-review.json
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
