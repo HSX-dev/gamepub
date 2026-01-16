@@ -1,0 +1,48 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - gosec          # 安全：硬编码凭据、弱随机数、SQL 拼接、文件权限、整数溢出等
+    - bodyclose      # resp.Body 未关闭
+    - noctx          # 发起 HTTP / SQL 请求时未携带 context
+    - rowserrcheck   # rows.Err() 未检查
+    - sqlclosecheck  # rows / stmt 未关闭
+    - errorlint      # 用 == 比较 wrapped error
+    - contextcheck   # 函数内断开 context 传递链
+    - containedctx   # 把 context 存进结构体
+    - forcetypeassert
+    - nilerr         # err != nil 却返回 nil
+    - copyloopvar
+    - durationcheck  # time.Duration 相乘错误
+    - gocritic
+    - misspell
+    - unconvert
+    - wastedassign
+  settings:
+    gosec:
+      severity: medium
+      confidence: medium
+    errcheck:
+      exclude-functions:
+        - (*github.com/redis/go-redis/v9.Client).Set
+        - (*github.com/redis/go-redis/v9.Client).Del
+  exclusions:
+    generated: strict
+    paths:
+      - api/gen
+    rules:
+      - path: _test\.go
+        linters: [gosec, forcetypeassert, noctx, errcheck, bodyclose, containedctx]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [gamepub]
