@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+option go_package = "gamepub/api/gen/wallet/v1;walletv1";
+
+// WalletService 钱包资金（平台币）。金额单位统一为最小单位（整数），禁止使用浮点。
+// 所有写接口都以 (biz_type, biz_id) 或 xid 作为幂等键，调用方可安全重试。
+service WalletService {
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+  rpc ListLedger(ListLedgerRequest) returns (ListLedgerResponse);
+  // 入账：充值到账、任务奖励、运营补偿
+  rpc Credit(CreditRequest) returns (CreditResponse);
+  // 扣减：直接消费
+  rpc Debit(DebitRequest) returns (DebitResponse);
+  // TCC：跨服务购买道具等分布式事务场景
+  rpc TryFreeze(TryFreezeRequest) returns (TryFreezeResponse);
+  rpc ConfirmFreeze(ConfirmFreezeRequest) returns (ConfirmFreezeResponse);
+  rpc CancelFreeze(CancelFreezeRequest) returns (CancelFreezeResponse);
+  rpc ListReconcileDiffs(ListReconcileDiffsRequest) returns (ListReconcileDiffsResponse);
+}
+
+message GetBalanceRequest {
+  uint64 user_id = 1;
+}
+
+message GetBalanceResponse {
+  uint64 user_id = 1;
+  int64 available = 2;
+  int64 frozen = 3;
+}
+
+message LedgerEntry {
+  uint64 id = 1;
+  string biz_type = 2;
+  string biz_id = 3;
+  int64 amount = 4;
+  int64 balance_after = 5;
+  string remark = 6;
+  int64 created_at = 7;
+}
+
+message ListLedgerRequest {
+  uint64 user_id = 1;
+  string biz_type = 2;
+  // 排序字段只接受白名单内的取值，服务端映射到真实列名
+  string sort_by = 3;
+  bool desc = 4;
+  int32 page = 5;
+  int32 page_size = 6;
+}
+
+message ListLedgerResponse {
+  repeated LedgerEntry entries = 1;
+  int64 total = 2;
+}
+
+message CreditRequest {
+  uint64 user_id = 1;
+  int64 amount = 2;
+  string biz_type = 3;
+  string biz_id = 4;
+  string remark = 5;
+}
+
+message CreditResponse {
+  uint64 ledger_id = 1;
+  int64 balance_after = 2;
+  // true 表示命中幂等：该业务单据此前已入账，本次未重复变更余额
+  bool duplicated = 3;
+}
+
+message DebitRequest {
+  uint64 user_id = 1;
+  int64 amount = 2;
+  string biz_type = 3;
+  string biz_id = 4;
+  string remark = 5;
+}
+
+message DebitResponse {
+  uint64 ledger_id = 1;
+  int64 balance_after = 2;
+  bool duplicated = 3;
+}
+
+message TryFreezeRequest {
+  string xid = 1;
+  uint64 user_id = 2;
+  int64 amount = 3;
+}
+
+message TryFreezeResponse {
+  string status = 1;
+}
+
+message ConfirmFreezeRequest {
+  string xid = 1;
+}
+
+message ConfirmFreezeResponse {
+  string status = 1;
+}
+
+message CancelFreezeRequest {
+  string xid = 1;
+}
+
+message CancelFreezeResponse {
+  string status = 1;
+}
+
+message ReconcileDiff {
+  uint64 user_id = 1;
+  int64 wallet_balance = 2;
+  int64 ledger_sum = 3;
+  int64 checked_at = 4;
+}
+
+message ListReconcileDiffsRequest {
+  int32 limit = 1;
+}
+
+message ListReconcileDiffsResponse {
+  repeated ReconcileDiff diffs = 1;
+}
