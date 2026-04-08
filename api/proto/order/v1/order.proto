@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package order.v1;
+
+option go_package = "gamepub/api/gen/order/v1;orderv1";
+
+// OrderService 支付订单 + 游戏接入配置。
+// 面向玩家的查询接口一律要求 user_id（由网关从 JWT 注入），服务端按归属过滤，杜绝水平越权。
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc BatchGetOrders(BatchGetOrdersRequest) returns (BatchGetOrdersResponse);
+  // 支付渠道异步通知：原始报文透传到订单服务做验签，渠道密钥不出订单服务
+  rpc HandlePayNotify(HandlePayNotifyRequest) returns (HandlePayNotifyResponse);
+  rpc AdminListOrders(AdminListOrdersRequest) returns (AdminListOrdersResponse);
+  rpc UpsertGameApp(UpsertGameAppRequest) returns (UpsertGameAppResponse);
+  rpc TestDelivery(TestDeliveryRequest) returns (TestDeliveryResponse);
+}
+
+message Order {
+  string order_no = 1;
+  uint64 user_id = 2;
+  string game_id = 3;
+  string product_id = 4;
+  // 单位：分。金额由服务端商品目录决定，客户端无法指定
+  int64 amount = 5;
+  int64 coin = 6;
+  string status = 7;
+  string channel = 8;
+  int64 created_at = 9;
+  int64 paid_at = 10;
+}
+
+message CreateOrderRequest {
+  uint64 user_id = 1;
+  string game_id = 2;
+  string product_id = 3;
+  string channel = 4;
+  string idempotency_key = 5;
+}
+
+message CreateOrderResponse {
+  Order order = 1;
+  string pay_url = 2;
+}
+
+message GetOrderRequest {
+  uint64 user_id = 1;
+  string order_no = 2;
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+message ListOrdersRequest {
+  uint64 user_id = 1;
+  string status = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
+  int64 total = 2;
+}
+
+message BatchGetOrdersRequest {
+  uint64 user_id = 1;
+  repeated string order_nos = 2;
+}
+
+message BatchGetOrdersResponse {
+  repeated Order orders = 1;
+}
+
+message HandlePayNotifyRequest {
+  string channel = 1;
+  bytes body = 2;
+  map<string, string> headers = 3;
+}
+
+message HandlePayNotifyResponse {
+  string reply = 1;
+}
+
+message AdminListOrdersRequest {
+  uint64 user_id = 1;
+  string status = 2;
+  string game_id = 3;
+  string sort_by = 4;
+  bool desc = 5;
+  int32 page = 6;
+  int32 page_size = 7;
+}
+
+message AdminListOrdersResponse {
+  repeated Order orders = 1;
+  int64 total = 2;
+}
+
+message GameApp {
+  string game_id = 1;
+  string name = 2;
+  string delivery_url = 3;
+  int64 updated_at = 4;
+  string updated_by = 5;
+}
+
+message UpsertGameAppRequest {
+  string game_id = 1;
+  string name = 2;
+  string delivery_url = 3;
+  string operator = 4;
+}
+
+message UpsertGameAppResponse {
+  GameApp app = 1;
+}
+
+message TestDeliveryRequest {
+  string game_id = 1;
+}
+
+message TestDeliveryResponse {
+  // 只回传状态码与耗时，不回显响应体，避免被当作 SSRF 回显通道
+  int32 status_code = 1;
+  int64 latency_ms = 2;
+}
