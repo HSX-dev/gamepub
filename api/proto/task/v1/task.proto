@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package task.v1;
+
+option go_package = "gamepub/api/gen/task/v1;taskv1";
+
+// TaskService 任务活动：进度由 Kafka 事件驱动累计，奖励通过钱包服务幂等发放。
+service TaskService {
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc ClaimReward(ClaimRewardRequest) returns (ClaimRewardResponse);
+}
+
+message TaskProgress {
+  string task_id = 1;
+  string title = 2;
+  int64 target = 3;
+  int64 progress = 4;
+  string status = 5;
+  int64 reward_coin = 6;
+  string period = 7;
+}
+
+message ListTasksRequest {
+  uint64 user_id = 1;
+}
+
+message ListTasksResponse {
+  repeated TaskProgress tasks = 1;
+}
+
+message ClaimRewardRequest {
+  uint64 user_id = 1;
+  string task_id = 2;
+}
+
+message ClaimRewardResponse {
+  int64 reward_coin = 1;
+  int64 balance_after = 2;
+}
