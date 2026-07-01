@@ -1,0 +1,151 @@
+# 网络隔离：默认拒绝一切，再按调用关系逐条放行。
+#
+#   ingress-nginx ──► gateway ──► account / wallet / order / task
+#                                  task ──► wallet
+#   所有服务 ──► MySQL / Redis / Kafka（数据面网段）
+#   order ──► 公网 80/443（游戏发货回调），显式排除私网与云元数据地址（SSRF 的网络层兜底）
+#   监控命名空间 ──► 各 Pod 6060（pprof / healthz）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-datastores
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/part-of: gamepub }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: gamepub-data }
+      ports:
+        - { protocol: TCP, port: 3306 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 9092 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: gateway }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/name, operator: In, values: [account, wallet, order, task] }
+      ports:
+        - { protocol: TCP, port: 9001 }
+        - { protocol: TCP, port: 9002 }
+        - { protocol: TCP, port: 9003 }
+        - { protocol: TCP, port: 9004 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-grpc-from-gateway
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [account, wallet, order, task] }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: gateway }
+      ports:
+        - { protocol: TCP, port: 9001 }
+        - { protocol: TCP, port: 9002 }
+        - { protocol: TCP, port: 9003 }
+        - { protocol: TCP, port: 9004 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wallet-from-task
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: wallet }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: task }
+      ports:
+        - { protocol: TCP, port: 9002 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: task-to-wallet
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: task }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/name: wallet }
+      ports:
+        - { protocol: TCP, port: 9002 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: order-egress-internet
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: order }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10 # CGNAT，含部分云厂商元数据地址
+              - 169.254.0.0/16 # 链路本地，含 169.254.169.254 元数据服务
+              - 127.0.0.0/8
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 80 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: debug-from-monitoring
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/part-of: gamepub }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { protocol: TCP, port: 6060 }

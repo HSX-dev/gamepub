@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gamepub
+
+# Secret 不在此处声明：由 External Secrets Operator 从 KMS/Vault 同步（示例见 secrets.example.yaml），
+# 仓库中永远不出现真实密钥。
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - networkpolicy.yaml
+  - gateway.yaml
+  - account.yaml
+  - wallet.yaml
+  - order.yaml
+  - task.yaml
+
+images:
+  - { name: gamepub/gateway, newName: registry.example.com/gamepub/gateway, newTag: "1.0.0" }
+  - { name: gamepub/account, newName: registry.example.com/gamepub/account, newTag: "1.0.0" }
+  - { name: gamepub/wallet, newName: registry.example.com/gamepub/wallet, newTag: "1.0.0" }
+  - { name: gamepub/order, newName: registry.example.com/gamepub/order, newTag: "1.0.0" }
+  - { name: gamepub/task, newName: registry.example.com/gamepub/task, newTag: "1.0.0" }

@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: account
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account
+  labels: { app.kubernetes.io/name: account, app.kubernetes.io/part-of: gamepub }
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: { app.kubernetes.io/name: account }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: account, app.kubernetes.io/part-of: gamepub }
+    spec:
+      serviceAccountName: account
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: account
+          image: gamepub/account
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: grpc, containerPort: 9001 }
+            - { name: debug, containerPort: 6060 }
+          envFrom:
+            - configMapRef: { name: gamepub-config }
+            - secretRef: { name: gamepub-account-secrets }
+          env:
+            - { name: GRPC_ADDR, value: ":9001" }
+            - { name: JWT_TTL, value: 2h }
+          readinessProbe:
+            grpc: { port: 9001 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: debug }
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              sleep: { seconds: 5 }
+          resources:
+            requests: { cpu: 200m, memory: 256Mi } # bcrypt 为 CPU 密集操作
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account
+spec:
+  clusterIP: None
+  selector: { app.kubernetes.io/name: account }
+  ports:
+    - { name: grpc, port: 9001, targetPort: grpc }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: account
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: account }
