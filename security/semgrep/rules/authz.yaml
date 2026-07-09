@@ -1,0 +1,69 @@
+rules:
+  - id: order-lookup-without-owner
+    languages: [go]
+    severity: WARNING
+    message: >-
+      按订单号/渠道流水号查询，但条件中没有同时限定 user_id，可能存在水平越权（CWE-639）。
+      面向玩家的查询必须写成 WHERE order_no = ? AND user_id = ?；回调、后台等无用户会话的场景请加
+      “nosemgrep: order-lookup-without-owner” 并在上一行注释写明理由，供复审核对。
+    metadata:
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp: "A01:2021 - Broken Access Control"
+      category: security
+      confidence: MEDIUM
+    paths:
+      exclude:
+        - "*_test.go"
+    patterns:
+      - pattern: $DB.Where("$Q", ...)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: (?i)\b(order_no|trade_no)\s*(=|in\b)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: ^((?!user_id).)*$
+
+  - id: user-id-from-request
+    languages: [go]
+    severity: WARNING
+    message: >-
+      玩家接口从请求参数读取 user_id。用户身份只能取自已校验的令牌（网关 userID(c)），
+      否则改个参数即可读写他人数据（CWE-639）。后台接口（admin* handler）不受此规则约束，但须挂 requirePerm。
+    metadata:
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: $C.Query("user_id")
+          - pattern: $C.Param("user_id")
+          - pattern: $C.PostForm("user_id")
+          - pattern: $C.DefaultQuery("user_id", ...)
+          - pattern: $C.Query("uid")
+      - pattern-either:
+          - pattern-inside: |
+              func $FUNC(...) {
+                ...
+              }
+          - pattern-inside: |
+              func ($RECV $T) $FUNC(...) {
+                ...
+              }
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: ^(?!admin|Admin)
+
+  - id: jwt-parse-without-valid-methods
+    languages: [go]
+    severity: ERROR
+    message: >-
+      解析 JWT 时未限定签名算法，存在 alg=none 或 RS/HS 算法混淆伪造令牌的风险（CWE-347）。
+      使用 jwt.NewParser(jwt.WithValidMethods(...), jwt.WithIssuer(...), jwt.WithAudience(...))。
+    metadata:
+      cwe: "CWE-347: Improper Verification of Cryptographic Signature"
+      category: security
+      confidence: HIGH
+    pattern-either:
+      - pattern: jwt.Parse($TOKEN, $KEYFUNC)
+      - pattern: jwt.ParseWithClaims($TOKEN, $CLAIMS, $KEYFUNC)
+      - pattern: $P.ParseUnverified(...)

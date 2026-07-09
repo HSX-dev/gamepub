@@ -1,0 +1,67 @@
+rules:
+  - id: gorm-sql-string-concat
+    languages: [go]
+    severity: ERROR
+    message: >-
+      GORM 的 SQL 片段通过字符串拼接或格式化构造，可能导致 SQL 注入（CWE-89）。
+      值请使用 ? 占位符参数化；列名、排序方向等标识符请经 pkg/sqlsafe 白名单映射。
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      owasp: "A03:2021 - Injection"
+      category: security
+      confidence: HIGH
+      references:
+        - docs/audit/checklist.md
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$METHOD(fmt.Sprintf(...), ...)
+          - pattern: $DB.$METHOD($A + $B, ...)
+          # 先拼接到变量再传入：报告位置落在调用行，便于在 MR 中定位
+          - patterns:
+              - pattern-inside: |
+                  $Q := fmt.Sprintf(...)
+                  ...
+              - pattern: $DB.$METHOD($Q, ...)
+          - patterns:
+              - pattern-inside: |
+                  $Q := $A + $B
+                  ...
+              - pattern: $DB.$METHOD($Q, ...)
+      - pattern-not: $DB.$METHOD("..." + "...", ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(Raw|Exec|Where|Or|Not|Having|Group|Order|Select|Joins|Distinct|Table|Pluck)$
+
+  - id: gorm-identifier-from-request
+    languages: [go]
+    severity: ERROR
+    mode: taint
+    message: >-
+      排序、分组、查询列等标识符直接来自请求参数。参数化查询无法保护标识符，
+      攻击者可借此注入表达式（如 CASE WHEN 盲注）或探测表结构（CWE-89）。请使用 sqlsafe.SortFields 白名单。
+    metadata:
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      category: security
+      confidence: HIGH
+    pattern-sources:
+      - pattern: $C.Query(...)
+      - pattern: $C.DefaultQuery(...)
+      - pattern: $C.Param(...)
+      - pattern: $C.PostForm(...)
+      - patterns:
+          - pattern: $REQ.$GETTER()
+          - metavariable-regex:
+              metavariable: $GETTER
+              regex: ^Get(SortBy|OrderBy|Sort|Order|Field|Fields|Column|Columns|GroupBy)$
+    pattern-sanitizers:
+      - pattern: $WL.OrderBy(...)
+      - pattern: $WL.Resolve(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Order($SINK)
+              - pattern: $DB.Group($SINK)
+              - pattern: $DB.Select($SINK, ...)
+              - pattern: $DB.Table($SINK, ...)
+              - pattern: $DB.Distinct($SINK, ...)
+          - focus-metavariable: $SINK

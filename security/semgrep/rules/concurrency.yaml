@@ -1,0 +1,81 @@
+rules:
+  - id: context-background-in-request-path
+    languages: [go]
+    severity: WARNING
+    message: >-
+      函数已持有 ctx，却又新建 context.Background()/TODO()：上游的取消与超时无法传递，
+      客户端断开后下游调用与 goroutine 仍继续运行（泄漏、雪崩）。需要脱离取消时使用 context.WithoutCancel(ctx)。
+    metadata:
+      category: reliability
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: context.Background()
+          - pattern: context.TODO()
+      - pattern-either:
+          - pattern-inside: |
+              func $F(..., $CTX context.Context, ...) { ... }
+          - pattern-inside: |
+              func $F(..., $CTX context.Context, ...) $R { ... }
+          - pattern-inside: |
+              func ($RECV $T) $F(..., $CTX context.Context, ...) { ... }
+          - pattern-inside: |
+              func ($RECV $T) $F(..., $CTX context.Context, ...) $R { ... }
+          - pattern-inside: |
+              func ($RECV $T) $F(..., $C *gin.Context) { ... }
+
+  - id: defer-in-loop
+    languages: [go]
+    severity: WARNING
+    message: >-
+      循环体内的 defer 要到函数返回时才执行：长循环/常驻消费循环会持续累积未关闭的连接、文件、rows 或未释放的锁。
+      把循环体抽成函数，或在本次迭代结束前显式释放。
+    metadata:
+      category: reliability
+      confidence: HIGH
+    patterns:
+      - pattern-inside: |
+          for ... { ... }
+      - pattern: defer $X(...)
+      - pattern-not-inside: |
+          func(...) { ... }
+      - pattern-not-inside: |
+          func(...) $R { ... }
+
+  - id: redis-lock-unsafe-release
+    languages: [go]
+    severity: ERROR
+    message: >-
+      直接 DEL 释放分布式锁：若业务执行超过锁 TTL，锁已被他人获取，DEL 会删掉别人的锁导致互斥失效。
+      使用随机 token + Lua 比对删除（pkg/redislock）。
+    metadata:
+      category: correctness
+      confidence: MEDIUM
+    patterns:
+      - pattern: $RDB.Del($CTX, $KEY)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*lock.*
+
+  - id: redis-setnx-then-expire
+    languages: [go]
+    severity: ERROR
+    message: SETNX 与 EXPIRE 分两步执行，进程在两步之间崩溃会留下永不过期的锁。使用 SET key value NX PX ttl 一步完成。
+    metadata:
+      category: correctness
+      confidence: HIGH
+    pattern: |
+      $R.SetNX($CTX, $K, $V, 0)
+      ...
+      $R.Expire($CTX, $K, $TTL)
+
+  - id: kafka-readmessage-autocommit
+    languages: [go]
+    severity: WARNING
+    message: >-
+      kafka-go 的 ReadMessage 在消费组模式下返回前就会提交位点，后续处理失败该消息即丢失。
+      使用 FetchMessage 处理成功（或写入死信）后再 CommitMessages（参见 pkg/mq.Consumer）。
+    metadata:
+      category: correctness
+      confidence: MEDIUM
+    pattern: $R.ReadMessage(...)

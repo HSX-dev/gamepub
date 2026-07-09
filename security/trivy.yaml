@@ -1,0 +1,17 @@
+# trivy fs --config security/trivy.yaml .
+# 一次扫描覆盖：依赖漏洞（go.sum）、配置缺陷（Dockerfile / K8s 清单）、误提交的密钥。
+exit-code: 1
+severity:
+  - HIGH
+  - CRITICAL
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+  skip-dirs:
+    - security/semgrep/testdata # 规则测试用例，故意包含漏洞写法
+  skip-files:
+    - tools/ai-review/review_test.go # 脱敏器测试用例，故意包含伪造的密钥样本
+vulnerability:
+  ignore-unfixed: true

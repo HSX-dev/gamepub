@@ -1,0 +1,68 @@
+rules:
+  - id: log-sensitive-value
+    languages: [go]
+    severity: WARNING
+    message: >-
+      日志中输出了口令、令牌、手机号、证件号或卡号等敏感数据（CWE-532）。删除该字段，或使用 pkg/mask 脱敏后再记录；
+      logx 会按字段名兜底脱敏，但不能依赖兜底。
+    metadata:
+      cwe: "CWE-532: Insertion of Sensitive Information into Log File"
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $LOG.$METHOD(..., $X.$FIELD, ...)
+              - metavariable-regex:
+                  metavariable: $FIELD
+                  regex: ^(Password|Passwd|NewPassword|Token|AccessToken|RefreshToken|Secret|Phone|Mobile|IDCard|IdCard|CardNo|BankCard|CVV|Cvv)$
+          - pattern: $LOG.$METHOD(..., $C.GetHeader("Authorization"), ...)
+          - pattern: $LOG.$METHOD(..., $R.Header, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(Debug|Info|Warn|Error|Log|Print|Printf|Println|Fatal|Fatalf|Panicf|Debugf|Infof|Warnf|Errorf|DebugContext|InfoContext|WarnContext|ErrorContext)$
+
+  - id: hardcoded-credential
+    languages: [go]
+    severity: ERROR
+    message: >-
+      疑似硬编码凭据（CWE-798）。密钥必须由 K8s Secret 注入环境变量并通过 config.Secret 读取，
+      已提交的密钥视为泄露，需要立即轮换。
+    metadata:
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      category: security
+      confidence: MEDIUM
+    paths:
+      exclude:
+        - "*_test.go"
+    patterns:
+      - pattern-either:
+          - pattern: $NAME := "$VAL"
+          - pattern: var $NAME = "$VAL"
+          - pattern: const $NAME = "$VAL"
+          - pattern: "$S{..., $NAME: \"$VAL\", ...}"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i).*(password|passwd|secret|api_?key|private_?key|token|dsn).*
+      - metavariable-regex:
+          metavariable: $VAL
+          regex: ^(?=.*[0-9])(?=.*[A-Za-z]).{8,}$
+
+  - id: password-fast-hash
+    languages: [go]
+    severity: ERROR
+    message: >-
+      使用快速哈希（MD5/SHA 系列）处理口令，泄库后可被 GPU 快速爆破（CWE-916）。使用 bcrypt / argon2id。
+    metadata:
+      cwe: "CWE-916: Use of Password Hash With Insufficient Computational Effort"
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: md5.Sum($X)
+          - pattern: sha1.Sum($X)
+          - pattern: sha256.Sum256($X)
+          - pattern: sha512.Sum512($X)
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i).*passw(or)?d.*

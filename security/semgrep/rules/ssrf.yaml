@@ -1,0 +1,63 @@
+rules:
+  - id: ssrf-unvalidated-outbound-url
+    languages: [go]
+    severity: ERROR
+    mode: taint
+    message: >-
+      出站请求的 URL 来自外部输入且未经 netguard 校验，存在 SSRF 风险（CWE-918），可被用于访问云元数据、
+      内网管理端口。保存配置时调用 Guard.ValidateURL，发起请求时使用 Guard.HTTPClient（连接时二次校验，防 DNS Rebinding / 302 绕过）。
+    metadata:
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp: "A10:2021 - Server-Side Request Forgery"
+      category: security
+      confidence: MEDIUM
+    pattern-sources:
+      - pattern: $C.Query(...)
+      - pattern: $C.PostForm(...)
+      - pattern: $C.Param(...)
+      - patterns:
+          - pattern: $REQ.$GETTER()
+          - metavariable-regex:
+              metavariable: $GETTER
+              regex: ^Get\w*(Url|URL|Uri|URI|Endpoint|Callback|Webhook)$
+    pattern-sanitizers:
+      - pattern: $GUARD.ValidateURL(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: http.Get($URL)
+              - pattern: http.Head($URL)
+              - pattern: http.Post($URL, ...)
+              - pattern: http.NewRequest($M, $URL, ...)
+              - pattern: http.NewRequestWithContext($CTX, $M, $URL, ...)
+          - focus-metavariable: $URL
+
+  - id: http-client-without-timeout
+    languages: [go]
+    severity: WARNING
+    message: >-
+      使用了没有超时的 HTTP 客户端（http.Get / http.DefaultClient / 未设置 Timeout 的 http.Client）。
+      下游无响应时 goroutine 与连接会无限堆积，拖垮主链路（CWE-400）。使用 resilience.Client 或显式设置 Timeout。
+    metadata:
+      cwe: "CWE-400: Uncontrolled Resource Consumption"
+      category: reliability
+      confidence: HIGH
+    pattern-either:
+      - pattern: http.Get(...)
+      - pattern: http.Head(...)
+      - pattern: http.Post(...)
+      - pattern: http.PostForm(...)
+      - pattern: http.DefaultClient.Do(...)
+      - patterns:
+          - pattern: http.Client{...}
+          - pattern-not: "http.Client{..., Timeout: $T, ...}"
+
+  - id: tls-insecure-skip-verify
+    languages: [go]
+    severity: ERROR
+    message: 关闭了 TLS 证书校验，通信可被中间人劫持（CWE-295）。
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      category: security
+      confidence: HIGH
+    pattern: "tls.Config{..., InsecureSkipVerify: true, ...}"
