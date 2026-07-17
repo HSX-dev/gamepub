@@ -1,0 +1,174 @@
+# 安全门禁流水线。分支保护需同时开启：
+#   Settings > Merge requests > Pipelines must succeed；受保护分支禁止直接推送。
+#
+# 阻断合并：golangci-lint(含 gosec 规则) / 单测(-race) / gosec / Semgrep ERROR 级 / govulncheck 可达漏洞 / Trivy HIGH+
+# 不阻断：Semgrep WARNING 级（进报告）、AI 辅助审查（allow_failure，结论待人工复核）
+#
+# 所有镜像固定版本；生产环境建议进一步固定到 digest。
+
+stages: [lint, test, security, build, image-scan, review]
+
+variables:
+  GO_IMAGE: golang:1.26
+  GOPATH: $CI_PROJECT_DIR/.go
+  GOCACHE: $CI_PROJECT_DIR/.cache/go-build
+  GOFLAGS: -mod=readonly
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+default:
+  interruptible: true
+
+.go-cache:
+  cache:
+    key:
+      files: [go.sum]
+    paths: [.go/pkg/mod, .cache/go-build]
+
+# ---------------- lint ----------------
+golangci-lint:
+  stage: lint
+  image: golangci/golangci-lint:v2.5.0
+  extends: .go-cache
+  script:
+    - golangci-lint run ./...
+
+buf:
+  stage: lint
+  image:
+    name: bufbuild/buf:1.57.0
+    entrypoint: [""]
+  script:
+    - buf lint
+    - |
+      if [ -n "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" ]; then
+        buf breaking --against "${CI_REPOSITORY_URL}#branch=${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      fi
+
+# ---------------- test ----------------
+unit-test:
+  stage: test
+  image: $GO_IMAGE
+  extends: .go-cache
+  script:
+    - go test -race -count=1 -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out | tail -1
+    - cd tools/ai-review && go test -race -count=1 ./...
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  artifacts:
+    paths: [coverage.out]
+    expire_in: 7 days
+
+# ---------------- security ----------------
+gosec:
+  stage: security
+  image: securego/gosec:2.22.9
+  needs: []
+  script:
+    - gosec -severity medium -confidence medium -exclude-generated -exclude-dir=security -fmt sarif -out gosec.sarif -stdout -verbose=text ./...
+  artifacts:
+    when: always
+    paths: [gosec.sarif]
+
+semgrep:
+  stage: security
+  image: semgrep/semgrep:1.140.0
+  needs: []
+  variables:
+    SEMGREP_SEND_METRICS: "off"
+  script:
+    # 1) 自定义规则必须先通过自身的单元测试
+    - semgrep --test --config security/semgrep/rules security/semgrep/testdata
+    # 2) 全量结果（含 WARNING）输出给报告与 AI 审查交叉验证
+    - >
+      semgrep scan --config security/semgrep/rules --config p/golang
+      --exclude '*_test.go' --exclude api/gen --exclude security/semgrep/testdata
+      --json -o semgrep.json --sarif-output=semgrep.sarif .
+    # 3) 门禁：ERROR 级规则命中即失败
+    - >
+      semgrep scan --config security/semgrep/rules --config p/golang --severity ERROR --error
+      --exclude '*_test.go' --exclude api/gen --exclude security/semgrep/testdata .
+  artifacts:
+    when: always
+    paths: [semgrep.json, semgrep.sarif]
+
+govulncheck:
+  stage: security
+  image: $GO_IMAGE
+  extends: .go-cache
+  needs: []
+  script:
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+    # 只对“代码实际调用到的”漏洞函数失败，减少依赖告警噪音
+    - $GOPATH/bin/govulncheck ./...
+    - cd tools/ai-review && $GOPATH/bin/govulncheck ./...
+
+trivy-fs:
+  stage: security
+  image:
+    name: aquasec/trivy:0.67.2
+    entrypoint: [""]
+  needs: []
+  script:
+    - trivy fs --config security/trivy.yaml .
+
+# ---------------- build ----------------
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  parallel:
+    matrix:
+      - SERVICE: [gateway, account, wallet, order, task]
+  script:
+    - |
+      DEST="--no-push"
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] || [ -n "$CI_COMMIT_TAG" ]; then
+        DEST="--destination ${CI_REGISTRY_IMAGE}/${SERVICE}:${CI_COMMIT_SHORT_SHA}"
+      fi
+      /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile deploy/Dockerfile \
+        --build-arg SERVICE="$SERVICE" --reproducible $DEST
+
+trivy-image:
+  stage: image-scan
+  image:
+    name: aquasec/trivy:0.67.2
+    entrypoint: [""]
+  needs: [build-image]
+  parallel:
+    matrix:
+      - SERVICE: [gateway, account, wallet, order, task]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_TAG
+  variables:
+    TRIVY_USERNAME: $CI_REGISTRY_USER
+    TRIVY_PASSWORD: $CI_REGISTRY_PASSWORD
+  script:
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "${CI_REGISTRY_IMAGE}/${SERVICE}:${CI_COMMIT_SHORT_SHA}"
+
+# ---------------- AI 辅助审查（不阻断） ----------------
+# ANTHROPIC_API_KEY / GITLAB_REVIEW_TOKEN 配置为 Protected + Masked 变量：
+# 来自 fork 的 MR 拿不到这些变量，因而不会执行，也不会把代码发给外部服务。
+ai-review:
+  stage: review
+  image: $GO_IMAGE
+  needs: [semgrep]
+  allow_failure: true
+  variables:
+    GIT_DEPTH: "0"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $ANTHROPIC_API_KEY
+  script:
+    - cd tools/ai-review && go build -o /tmp/ai-review . && cd "$CI_PROJECT_DIR"
+    - >
+      /tmp/ai-review -base "$CI_MERGE_REQUEST_DIFF_BASE_SHA" -head "$CI_COMMIT_SHA"
+      -semgrep semgrep.json -out ai-review.md -json ai-review.json -gitlab-note
+  artifacts:
+    when: always
+    paths: [ai-review.md, ai-review.json]
+    expire_in: 30 days
