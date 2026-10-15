@@ -107,6 +107,15 @@ docs/                  架构说明与审计文档
 
 **AI 辅助审查**（[tools/ai-review](tools/ai-review)）在 MR 流水线中运行，不阻断：收集 diff → 外发前脱敏 → Claude 按审查清单输出结构化结论 → 与 Semgrep 结果按文件和行号交叉验证 → 生成报告初稿并评论到 MR。所有结论标注“待人工复核”；模型输出中的 @提醒、HTML 会被转义（diff 内容可能包含提示注入）；引用了 diff 之外文件的结论会被丢弃。
 
+本地开发时也可以在 Claude Code 中使用同一套清单和报告格式：[.claude/skills/ai-review](.claude/skills/ai-review/SKILL.md)。它能读取上下文代码和测试，逐条核实后再报告，不需要额外的 API key。
+
+```text
+/ai-review               # 当前分支相对 origin/main；没有则审查未提交改动
+/ai-review HEAD~3        # 最近 3 个提交
+/ai-review --staged      # 已暂存改动
+/ai-review internal/order   # 对指定目录做专项审计
+```
+
 ## 本地运行
 
 需要 Go 1.26+、buf（改 proto 时）、Docker（跑完整环境时）。
